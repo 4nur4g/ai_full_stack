@@ -1,0 +1,24 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Virtual environment directories
+.env
+.venv
+venv/
+env/
+
+# Poetry virtual environment (if created in the project directory)
+.poetry/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+.idea/
+.vscode/
+.ropeproject/
+
+# MacOS
+.DS_Store
