@@ -1,18 +1,36 @@
-from fastapi import Depends, FastAPI
+from contextlib import asynccontextmanager
 
-from .dependencies import get_token_header
+import uvicorn
+from fastapi import FastAPI
+
+from .connections.connection import connect_chroma_db
 from .routers import ai
 
-app = FastAPI(prefix="/api")
+
+@asynccontextmanager
+async def lifespan(fast_app: FastAPI):
+    await connect_chroma_db(fast_app)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.include_router(
     ai.router,
-    prefix="v1/ai",
+    prefix="/ai",
     tags=["ai"],
-    dependencies=[Depends(get_token_header)],
 )
 
 
 @app.get("/")
 async def root():
     return {"message": "Hello, World!"}
+
+
+def start():
+    """To run the development server"""
+    uvicorn.run("app.main:app", host="0.0.0.0", port=3006, reload=True)
+
+
+if __name__ == "__main__":
+    start()
