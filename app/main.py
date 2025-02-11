@@ -9,7 +9,7 @@ from .routers import ai
 
 @asynccontextmanager
 async def lifespan(fast_app: FastAPI):
-    await connect_chroma_db(fast_app)
+    connect_chroma_db(fast_app)
     yield
 
 

@@ -1,12 +1,12 @@
 import chromadb
-from chromadb import AsyncClientAPI
+from chromadb import ClientAPI
 from fastapi import FastAPI
 
 
-async def connect_chroma_db(app: FastAPI) -> AsyncClientAPI:
-    chroma_client = await chromadb.AsyncHttpClient(host='localhost', port=8000)
+def connect_chroma_db(app: FastAPI) -> ClientAPI:
+    chroma_client = chromadb.HttpClient(host='localhost', port=8000)
     app.state.chroma_client = chroma_client
-    if await chroma_client.heartbeat():
+    if chroma_client.heartbeat():
         print("Chroma client is connected.")
     else:
         print("Failed to connect to Chroma client.")
