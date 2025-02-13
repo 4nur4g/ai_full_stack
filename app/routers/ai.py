@@ -2,13 +2,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Body, File
 from fastapi import UploadFile, Request
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains.retrieval import create_retrieval_chain
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import SystemMessage
+from langchain_core.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langgraph.constants import END
+from langgraph.graph import StateGraph, MessagesState
+from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
+from rich.pretty import pprint
 
 from app.utils.llm import get_embedding_model, get_llm
 
@@ -17,8 +20,8 @@ router = APIRouter()
 
 @router.post("/upload-files", summary="Upload one or more text files to the knowledge_base collection")
 async def upload_files(
-    request: Request,
-    files: list[UploadFile] = File(...),
+        request: Request,
+        files: list[UploadFile] = File(...),
 ):
     """
     Accepts one or more text files via form-data (with the field name 'files'),
@@ -73,6 +76,7 @@ async def upload_files(
 
     return {"data": results, "error": False}
 
+
 class Chat(BaseModel):
     message: str
 
@@ -80,38 +84,88 @@ class Chat(BaseModel):
 @router.post("/chat")
 async def chat(body: Annotated[Chat, Body()], request: Request):
     """
-    Accepts a message in the request body and returns a response from the LLM using a RetrievalQA chain.
+    Accepts a message in the request body and returns a response from the LLM.
     """
     db = request.app.state.chroma_client
+    llm = get_llm()
 
-    vector_store = Chroma(
-        client=db,
-        collection_name="knowledge_base_v2",
-        embedding_function=get_embedding_model(),
-    )
+    @tool(response_format="content_and_artifact")
+    def retrieve(query: str):
+        """Retrieve information related to a query."""
+        vector_store = Chroma(
+            client=db,
+            collection_name="knowledge_base_v2",
+            embedding_function=get_embedding_model(),
+        )
+        retrieved_docs = vector_store.similarity_search(query, k=2)
+        serialized = "\n\n".join(
+            f"Source: {doc.metadata}\n" f"Content: {doc.page_content}"
+            for doc in retrieved_docs
+        )
+        return serialized, retrieved_docs
 
-    retriever = vector_store.as_retriever(
-        search_type="similarity_score_threshold",
-        search_kwargs={"k": 3, "score_threshold": 0.5},
-    )
+    # Step 1: Generate an AIMessage that may include a tool-call to be sent.
+    def query_or_respond(state: MessagesState):
+        """Generate tool call for retrieval or respond."""
+        llm_with_tools = llm.bind_tools([retrieve])
+        response = llm_with_tools.invoke(state["messages"])
+        # MessagesState appends messages to state instead of overwriting
+        return {"messages": [response]}
 
-    system_prompt = (
-        "You're an Indian human assistant."
-        "Use only the given context to answer the question. "
-        "If you cannot conclude the answer, say you don't know. "
-        "Strictly use the context to answer the question. "
-        "Use ten sentence maximum and keep the answer concise. \n"
-        "Context: {context}"
-    )
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            ("human", "{input}"),
+    # Step 2: Execute the retrieval.
+    tools = ToolNode([retrieve])
+
+    # Step 3: Generate a response using the retrieved content.
+    def generate(state: MessagesState):
+        """Generate answer."""
+        # Get generated ToolMessages
+        recent_tool_messages = []
+        for message in reversed(state["messages"]):
+            if message.type == "tool":
+                recent_tool_messages.append(message)
+            else:
+                break
+        tool_messages = recent_tool_messages[::-1]
+
+        # Format into prompt
+        docs_content = "\n\n".join(doc.content for doc in tool_messages)
+        system_message_content = (
+            "You are an assistant for question-answering tasks. "
+            "Use the following pieces of retrieved context to answer "
+            "the question. If you don't know the answer, say that you "
+            "don't know. Use three sentences maximum and keep the "
+            "answer concise."
+            "\n\n"
+            f"{docs_content}"
+        )
+        conversation_messages = [
+            message
+            for message in state["messages"]
+            if message.type in ("human", "system")
+               or (message.type == "ai" and not message.tool_calls)
         ]
+        prompt = [SystemMessage(system_message_content)] + conversation_messages
+
+        # Run
+        response = llm.invoke(prompt)
+        return {"messages": [response]}
+
+    graph_builder = StateGraph(MessagesState)
+    graph_builder.add_node(query_or_respond)
+    graph_builder.add_node(tools)
+    graph_builder.add_node(generate)
+
+    graph_builder.set_entry_point("query_or_respond")
+    graph_builder.add_conditional_edges(
+        "query_or_respond",
+        tools_condition,
+        {END: END, "tools": "tools"},
     )
-    question_answer_chain = create_stuff_documents_chain(get_llm(), prompt)
-    chain = create_retrieval_chain(retriever, question_answer_chain)
+    graph_builder.add_edge("tools", "generate")
+    graph_builder.add_edge("generate", END)
 
-    result = chain.invoke({"input": body.message})
+    graph = graph_builder.compile()
 
-    return {"data": result["answer"], "error": False}
+    result = graph.invoke({"messages": [{"role": "user", "content": body.message}]})
+    pprint(result)
+    return {"data": result["messages"][-1].content, "error": False}

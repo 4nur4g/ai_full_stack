@@ -7,5 +7,5 @@ def get_embedding_model(model="nomic-embed-text"):
     return OllamaEmbeddings(model=model)
 
 
-def get_llm(model="gemma2:latest"):
+def get_llm(model="llama3.2:latest"):
     return ChatOllama(model=model)
