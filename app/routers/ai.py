@@ -90,14 +90,14 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
     llm = get_llm()
 
     @tool(response_format="content_and_artifact")
-    def retrieve(query: str):
+    async def retrieve(query: str):
         """Retrieve information related to a query."""
         vector_store = Chroma(
             client=db,
             collection_name="knowledge_base_v2",
             embedding_function=get_embedding_model(),
         )
-        retrieved_docs = vector_store.similarity_search(query, k=2)
+        retrieved_docs = await vector_store.asimilarity_search(query, k=2)
         serialized = "\n\n".join(
             f"Source: {doc.metadata}\n" f"Content: {doc.page_content}"
             for doc in retrieved_docs
@@ -105,7 +105,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
         return serialized, retrieved_docs
 
     # Step 1: Generate an AIMessage that may include a tool-call to be sent.
-    def query_or_respond(state: MessagesState):
+    async def query_or_respond(state: MessagesState):
         """Generate tool call for retrieval or respond."""
         llm_with_tools = llm.bind_tools([retrieve])
         system_message_content = (
@@ -113,7 +113,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
             "You are a Insurance Policy expert"
         )
         system_message = SystemMessage(content=system_message_content)
-        response = llm_with_tools.invoke([system_message] + state["messages"])
+        response = await llm_with_tools.ainvoke([system_message] + state["messages"])
         # MessagesState appends messages to state instead of overwriting
         return {"messages": [response]}
 
@@ -121,7 +121,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
     tools = ToolNode([retrieve])
 
     # Step 3: Generate a response using the retrieved content.
-    def generate(state: MessagesState):
+    async def generate(state: MessagesState):
         """Generate answer."""
         # Get generated ToolMessages
         recent_tool_messages = []
@@ -152,7 +152,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
         prompt = [SystemMessage(system_message_content)] + conversation_messages
 
         # Run
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         return {"messages": [response]}
 
     graph_builder = StateGraph(MessagesState)
@@ -171,6 +171,6 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
 
     graph = graph_builder.compile()
 
-    result = graph.invoke({"messages": [{"role": "user", "content": body.message}]})
+    result = await graph.ainvoke({"messages": [{"role": "user", "content": body.message}]})
     pprint(result)
     return {"data": result["messages"][-1].content, "error": False}
