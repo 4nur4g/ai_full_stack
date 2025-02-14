@@ -108,7 +108,12 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
     def query_or_respond(state: MessagesState):
         """Generate tool call for retrieval or respond."""
         llm_with_tools = llm.bind_tools([retrieve])
-        response = llm_with_tools.invoke(state["messages"])
+        system_message_content = (
+            "You're Maiyur, a PB Partners employee"
+            "You are a Insurance Policy expert"
+        )
+        system_message = SystemMessage(content=system_message_content)
+        response = llm_with_tools.invoke([system_message] + state["messages"])
         # MessagesState appends messages to state instead of overwriting
         return {"messages": [response]}
 
