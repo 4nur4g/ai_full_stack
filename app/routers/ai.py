@@ -12,6 +12,7 @@ from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
 from rich.pretty import pprint
+from fastapi.responses import StreamingResponse
 
 from app.utils.llm import get_embedding_model, get_llm
 
@@ -79,6 +80,7 @@ async def upload_files(
 
 class Chat(BaseModel):
     message: str
+    stream: bool = True
 
 
 @router.post("/chat")
@@ -171,6 +173,18 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
 
     graph = graph_builder.compile()
 
-    result = await graph.ainvoke({"messages": [{"role": "user", "content": body.message}]})
-    pprint(result)
-    return {"data": result["messages"][-1].content, "error": False}
+    if not body.stream:
+        result = await graph.ainvoke({"messages": [{"role": "user", "content": body.message}]})
+        pprint(result)
+        return {"data": result["messages"][-1].content, "error": False}
+
+    async def event_generator():
+        async for message, metadata in graph.astream(
+                {"messages": [{"role": "user", "content": body.message}]},
+                stream_mode="messages",
+        ):
+            if metadata["langgraph_node"] in ["query_or_respond", "generate"]:
+                content = message.content
+                yield f"data: {content}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
