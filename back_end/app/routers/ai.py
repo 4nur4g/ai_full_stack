@@ -1,7 +1,11 @@
+from io import BytesIO
 from typing import Annotated
 
+from app.utils.llm import get_embedding_model, get_llm
+from app.utils.loader import BytesIOPyMuPDFLoader
 from fastapi import APIRouter, HTTPException, Body, File
 from fastapi import UploadFile, Request
+from fastapi.responses import StreamingResponse
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage
@@ -12,9 +16,6 @@ from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
 from rich.pretty import pprint
-from fastapi.responses import StreamingResponse
-
-from app.utils.llm import get_embedding_model, get_llm
 
 router = APIRouter()
 
@@ -25,12 +26,12 @@ async def upload_files(
         files: list[UploadFile] = File(...),
 ):
     """
-    Accepts one or more text files via form-data (with the field name 'files'),
-    checks whether each document (using its filename as a unique identifier in metadata 'source')
-    is already present in the Chroma vector store (collection: 'knowledge_base_v1'),
+    Accepts one or more text files via form-data (field name 'files'),
+    checks if each document (using its filename as a unique identifier in metadata 'source')
+    is already in the Chroma vector store (collection: 'knowledge_base_v2'),
     and adds it if not.
     """
-    if not files or len(files) < 1 or len(files) > 5:
+    if not (1 <= len(files) <= 5):
         raise HTTPException(status_code=400, detail="Please upload between 1 and 5 files.")
 
     db = request.app.state.chroma_client
@@ -39,14 +40,13 @@ async def upload_files(
         collection_name="knowledge_base_v2",
         embedding_function=get_embedding_model(),
     )
-
-    results = []
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    results = []
 
     for file in files:
+        # Check if file already exists based on its filename.
         existing = vector_store.get(where={"source": file.filename}, limit=1)
-        print(existing)
-        if existing and "ids" in existing and len(existing["ids"]) > 0:
+        if existing and existing.get("ids"):
             results.append({
                 "filename": file.filename,
                 "status": "exists",
@@ -56,7 +56,6 @@ async def upload_files(
 
         try:
             content_bytes = await file.read()
-            content = content_bytes.decode("utf-8")
         except Exception as e:
             results.append({
                 "filename": file.filename,
@@ -65,8 +64,40 @@ async def upload_files(
             })
             continue
 
-        document = Document(page_content=content, metadata={"source": file.filename})
-        chunks = text_splitter.split_documents([document])
+        # Process file based on its content type.
+        if file.content_type == "text/plain":
+            try:
+                content = content_bytes.decode("utf-8")
+            except UnicodeDecodeError as e:
+                results.append({
+                    "filename": file.filename,
+                    "status": "error",
+                    "message": f"Decoding error: {str(e)}"
+                })
+                continue
+            documents = [Document(page_content=content, metadata={"source": file.filename})]
+        elif file.content_type == "application/pdf":
+            pdf_stream = BytesIO(content_bytes)
+            try:
+                loader = BytesIOPyMuPDFLoader(pdf_stream)
+                documents = loader.load()
+            except Exception as e:
+                results.append({
+                    "filename": file.filename,
+                    "status": "error",
+                    "message": f"Error processing PDF: {str(e)}"
+                })
+                continue
+        else:
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "message": f"Unsupported file type: {file.content_type}"
+            })
+            continue
+
+        # Split the document(s) into chunks and add to the vector store.
+        chunks = text_splitter.split_documents(documents)
         vector_store.add_documents(chunks)
         results.append({
             "filename": file.filename,
@@ -99,7 +130,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
             collection_name="knowledge_base_v2",
             embedding_function=get_embedding_model(),
         )
-        retrieved_docs = await vector_store.asimilarity_search(query, k=2)
+        retrieved_docs = await vector_store.asimilarity_search(query, k=3)
         serialized = "\n\n".join(
             f"Source: {doc.metadata}\n" f"Content: {doc.page_content}"
             for doc in retrieved_docs
