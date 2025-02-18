@@ -1,5 +1,44 @@
 'use client'
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
+// A component that displays three smoothly animated dots
+const LoadingBubble = () => {
+  return (
+    <>
+      {/* Define custom keyframes for smooth bounce */}
+      <style jsx>{`
+        @keyframes smooth-bounce {
+          0% { transform: translateY(0); opacity: 0.5; }
+          50% { transform: translateY(-8px); opacity: 1; }
+          100% { transform: translateY(0); opacity: 0.5; }
+        }
+      `}</style>
+      <div className="flex items-center space-x-2">
+        <div
+          className="w-2 h-2 bg-gray-400 rounded-full"
+          style={{
+            animation: "smooth-bounce 1s ease-in-out infinite",
+            animationDelay: "0s",
+          }}
+        ></div>
+        <div
+          className="w-2 h-2 bg-gray-400 rounded-full"
+          style={{
+            animation: "smooth-bounce 1s ease-in-out infinite",
+            animationDelay: "0.2s",
+          }}
+        ></div>
+        <div
+          className="w-2 h-2 bg-gray-400 rounded-full"
+          style={{
+            animation: "smooth-bounce 1s ease-in-out infinite",
+            animationDelay: "0.4s",
+          }}
+        ></div>
+      </div>
+    </>
+  );
+};
 
 export default function Home() {
   const [message, setMessage] = useState("");
@@ -7,7 +46,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
-
+  const router = useRouter();
   // Auto-scroll to the bottom when messages update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -26,7 +65,7 @@ export default function Home() {
 
     try {
       // Use fetch to POST the message with stream mode enabled.
-      const response = await fetch("http://127.0.0.1:3006/ai/chat", {
+      const response = await fetch("http://10.1.35.29:3006/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage.content, stream: true }),
@@ -82,7 +121,9 @@ export default function Home() {
   return (
     <main className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-blue-600 text-white p-4 text-center font-bold text-xl">
+      <header className="bg-blue-600 text-white p-4 font-bold text-xl" onClick={() => {
+        router.refresh();
+      }}>
         AI Chat
       </header>
 
@@ -97,13 +138,17 @@ export default function Home() {
                 className={`flex ${isUser ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-xs break-words rounded-lg p-3 shadow-md ${
-                    isUser
+                  className={`max-w-xs break-words rounded-lg p-3 shadow-md ${isUser
                       ? "bg-blue-500 text-white"
                       : "bg-gray-200 text-gray-800"
-                  }`}
+                    }`}
                 >
-                  {msg.content}
+                  {msg.role === "ai" && msg.content === "" ? (
+                    // Render the loading bubble if AI's content is still empty
+                    <LoadingBubble />
+                  ) : (
+                    msg.content
+                  )}
                 </div>
               </div>
             );
@@ -124,7 +169,7 @@ export default function Home() {
       >
         <div className="flex items-center">
           <textarea
-            className="flex-1 resize-none rounded-full border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            className="flex-1 resize-none rounded-full border border-gray-300 p-3 focus:outline-none focus:ring-2 focus:ring-blue-400 text-gray-900"
             placeholder="Type your message... (Enter to send, Shift+Enter for newline)"
             rows="1"
             value={message}
