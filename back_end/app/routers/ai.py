@@ -81,6 +81,8 @@ async def upload_files(
             try:
                 loader = BytesIOPyMuPDFLoader(pdf_stream)
                 documents = loader.load()
+                for document in documents:
+                    document.metadata["source"] = file.filename
             except Exception as e:
                 results.append({
                     "filename": file.filename,
@@ -146,7 +148,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
             "You are a Insurance Policy expert"
         )
         system_message = SystemMessage(content=system_message_content)
-        response = await llm_with_tools.ainvoke([system_message] + state["messages"])
+        response = state["messages"] + await llm_with_tools.ainvoke([system_message])
         # MessagesState appends messages to state instead of overwriting
         return {"messages": [response]}
 

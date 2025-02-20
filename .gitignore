@@ -9,7 +9,7 @@ venv/
 env/
 
 # Poetry virtual environment (if created in the project directory)
-.poetry/
+back_end/poetry/
 
 # Build artifacts
 build/
@@ -23,7 +23,7 @@ dist/
 # MacOS
 .DS_Store
 
-node_modules/
+front_end/node_modules/
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
