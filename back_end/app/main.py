@@ -4,14 +4,16 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .connections.connection import connect_chroma_db
+from .connections.connection import connect_chroma_db, connect_pg
 from .routers import ai
 
 
 @asynccontextmanager
 async def lifespan(fast_app: FastAPI):
     connect_chroma_db(fast_app)
+    pg_async_connection_pool = await connect_pg(fast_app)
     yield
+    pg_async_connection_pool.close()
 
 
 app = FastAPI(lifespan=lifespan)

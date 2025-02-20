@@ -1,9 +1,7 @@
 from io import BytesIO
 from typing import Annotated
 
-from app.utils.llm import get_embedding_model, get_llm
-from app.utils.loader import BytesIOPyMuPDFLoader
-from fastapi import APIRouter, HTTPException, Body, File
+from fastapi import APIRouter, HTTPException, Body, File, FastAPI
 from fastapi import UploadFile, Request
 from fastapi.responses import StreamingResponse
 from langchain_chroma import Chroma
@@ -11,11 +9,15 @@ from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.constants import END
 from langgraph.graph import StateGraph, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
 from rich.pretty import pprint
+
+from app.utils.llm import get_embedding_model, get_llm
+from app.utils.loader import BytesIOPyMuPDFLoader
 
 router = APIRouter()
 
@@ -148,8 +150,8 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
             "You are a Insurance Policy expert"
         )
         system_message = SystemMessage(content=system_message_content)
-        response = state["messages"] + await llm_with_tools.ainvoke([system_message])
-        # MessagesState appends messages to state instead of overwriting
+        to_feed = [system_message] + state["messages"]
+        response = await llm_with_tools.ainvoke(to_feed)
         return {"messages": [response]}
 
     # Step 2: Execute the retrieval.
@@ -203,11 +205,13 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
     )
     graph_builder.add_edge("tools", "generate")
     graph_builder.add_edge("generate", END)
-
-    graph = graph_builder.compile()
-
+    async with request.app.state.pool.connection() as connection:
+        checkpointer = AsyncPostgresSaver(connection)
+        await checkpointer.setup()
+    graph = graph_builder.compile(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "1"}}
     if not body.stream:
-        result = await graph.ainvoke({"messages": [{"role": "user", "content": body.message}]})
+        result = await graph.ainvoke({"messages": [{"role": "user", "content": body.message}]}, config)
         pprint(result)
         return {"data": result["messages"][-1].content, "error": False}
 
@@ -215,6 +219,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
         async for message, metadata in graph.astream(
                 {"messages": [{"role": "user", "content": body.message}]},
                 stream_mode="messages",
+                config=config,
         ):
             if metadata["langgraph_node"] in ["query_or_respond", "generate"]:
                 content = message.content
