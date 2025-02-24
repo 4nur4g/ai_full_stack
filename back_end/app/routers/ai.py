@@ -1,3 +1,5 @@
+import os
+import tempfile
 from io import BytesIO
 from typing import Annotated
 
@@ -11,27 +13,32 @@ from langchain_core.tools import tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.constants import END
-from langgraph.graph import StateGraph, MessagesState
+from langgraph.graph import StateGraph, MessagesState, add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
 from rich.pretty import pprint
+from langchain_community.document_loaders import UnstructuredPDFLoader
 
 from app.utils.llm import get_embedding_model, get_llm
 from app.utils.loader import BytesIOPyMuPDFLoader
 
 router = APIRouter()
 
+collection_name = "knowledge_base_v10"
+thread_id = str(32)
+chunk_size = 1000
+chunk_overlap = 100
 
 @router.post("/upload-files", summary="Upload one or more text files to the knowledge_base collection")
 async def upload_files(
-        request: Request,
-        files: list[UploadFile] = File(...),
+    request: Request,
+    files: list[UploadFile] = File(...),
 ):
     """
-    Accepts one or more text files via form-data (field name 'files'),
+    Accepts one or more files via form-data (field name 'files'),
     checks if each document (using its filename as a unique identifier in metadata 'source')
-    is already in the Chroma vector store (collection: 'knowledge_base_v2'),
-    and adds it if not.
+    is already in the Chroma vector store (collection: 'knowledge_base_v4'),
+    and adds it if not. Files are temporarily saved on disk before processing.
     """
     if not (1 <= len(files) <= 5):
         raise HTTPException(status_code=400, detail="Please upload between 1 and 5 files.")
@@ -39,10 +46,10 @@ async def upload_files(
     db = request.app.state.chroma_client
     vector_store = Chroma(
         client=db,
-        collection_name="knowledge_base_v2",
+        collection_name=collection_name,
         embedding_function=get_embedding_model(),
     )
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     results = []
 
     for file in files:
@@ -66,23 +73,40 @@ async def upload_files(
             })
             continue
 
+        # Save file temporarily on disk.
+        # The suffix is determined from the original filename to preserve file type.
+        suffix = os.path.splitext(file.filename)[1]
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                tmp_file.write(content_bytes)
+                temp_file_path = tmp_file.name
+        except Exception as e:
+            results.append({
+                "filename": file.filename,
+                "status": "error",
+                "message": f"Error saving temporary file: {str(e)}"
+            })
+            continue
+
         # Process file based on its content type.
         if file.content_type == "text/plain":
             try:
-                content = content_bytes.decode("utf-8")
+                with open(temp_file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
             except UnicodeDecodeError as e:
                 results.append({
                     "filename": file.filename,
                     "status": "error",
                     "message": f"Decoding error: {str(e)}"
                 })
+                os.remove(temp_file_path)
                 continue
             documents = [Document(page_content=content, metadata={"source": file.filename})]
         elif file.content_type == "application/pdf":
-            pdf_stream = BytesIO(content_bytes)
             try:
-                loader = BytesIOPyMuPDFLoader(pdf_stream)
+                loader = UnstructuredPDFLoader(temp_file_path)
                 documents = loader.load()
+                # Ensure each document carries the filename as metadata.
                 for document in documents:
                     document.metadata["source"] = file.filename
             except Exception as e:
@@ -91,6 +115,7 @@ async def upload_files(
                     "status": "error",
                     "message": f"Error processing PDF: {str(e)}"
                 })
+                os.remove(temp_file_path)
                 continue
         else:
             results.append({
@@ -98,7 +123,11 @@ async def upload_files(
                 "status": "error",
                 "message": f"Unsupported file type: {file.content_type}"
             })
+            os.remove(temp_file_path)
             continue
+
+        # Remove the temporary file after processing.
+        os.remove(temp_file_path)
 
         # Split the document(s) into chunks and add to the vector store.
         chunks = text_splitter.split_documents(documents)
@@ -111,7 +140,6 @@ async def upload_files(
         })
 
     return {"data": results, "error": False}
-
 
 class Chat(BaseModel):
     message: str
@@ -128,13 +156,13 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
 
     @tool(response_format="content_and_artifact")
     async def retrieve(query: str):
-        """Retrieve information related to a query."""
+        """Retrieve information related to policy related query."""
         vector_store = Chroma(
             client=db,
-            collection_name="knowledge_base_v2",
+            collection_name=collection_name,
             embedding_function=get_embedding_model(),
         )
-        retrieved_docs = await vector_store.asimilarity_search(query, k=3)
+        retrieved_docs = await vector_store.asimilarity_search(query)
         serialized = "\n\n".join(
             f"Source: {doc.metadata}\n" f"Content: {doc.page_content}"
             for doc in retrieved_docs
@@ -209,7 +237,7 @@ async def chat(body: Annotated[Chat, Body()], request: Request):
         checkpointer = AsyncPostgresSaver(connection)
         await checkpointer.setup()
     graph = graph_builder.compile(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": "1"}}
+    config = {"configurable": {"thread_id": thread_id}}
     if not body.stream:
         result = await graph.ainvoke({"messages": [{"role": "user", "content": body.message}]}, config)
         pprint(result)
