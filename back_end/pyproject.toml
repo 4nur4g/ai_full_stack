@@ -31,7 +31,8 @@ dependencies = [
     "postgres (>=4.0,<5.0)",
     "psycopg (>=3.2.4,<4.0.0)",
     "3 (>=0.0.0,<0.0.1)",
-    "langgraph-checkpoint-postgres (>=2.0.15,<3.0.0)"
+    "langgraph-checkpoint-postgres (>=2.0.15,<3.0.0)",
+    "graphviz (>=0.20.3,<0.21.0)"
 ]
 
 

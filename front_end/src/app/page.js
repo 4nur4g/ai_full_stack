@@ -65,7 +65,7 @@ export default function Home() {
 
     try {
       // Use fetch to POST the message with stream mode enabled.
-      const response = await fetch("http://0.0.0.0:3006/ai/chat", {
+      const response = await fetch("http://10.1.32.136:3006/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage.content, stream: true }),
