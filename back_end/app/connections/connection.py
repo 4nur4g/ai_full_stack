@@ -9,7 +9,7 @@ from app.config import settings
 
 def connect_chroma_db(app: FastAPI) -> ClientAPI:
     chroma_client = chromadb.HttpClient(host='localhost', port=8000)
-    app.state.chroma_client = chroma_client
+    app.chroma_client = chroma_client
     if chroma_client.heartbeat():
         print("Chroma client is connected.")
     else:
@@ -29,7 +29,7 @@ connection_kwargs = {
 
 
 async def connect_pg(app: FastAPI):
-    app.state.pool = AsyncConnectionPool(
+    app.pool = AsyncConnectionPool(
         # Example configuration
         conninfo=DB_URI,
         max_size=20,
